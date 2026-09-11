@@ -260,3 +260,51 @@ def test_blinkcosine_upper_bound_cosinegreedy():
     assert score_bc >= score_cg - 1e-6, \
         f"Expected BlinkCosine score {score_bc} to be >= CosineGreedy {score_cg}"
     
+
+def test_default_score_dtype_matches_other_cosine_scores():
+    """Default score dtype must be float64 like the other cosine scores (issue #880)."""
+    builder = SpectrumBuilder()
+    s1 = _build(builder, [100, 200, 300], [0.1, 0.2, 1.0])
+    s2 = _build(builder, [100, 205, 305], [0.2, 0.3, 1.0])
+
+    bc = BlinkCosine(tolerance=5.0, bin_width=1.0, prefilter=False)
+    cg = CosineGreedy(tolerance=5.0)
+
+    assert np.dtype(bc.score_datatype) == np.dtype(cg.score_datatype)
+    assert bc.pair(s1, s2).dtype == cg.pair(s1, s2).dtype
+    assert bc.matrix([s1], [s2], array_type="numpy").dtype == np.float64
+    assert bc.matrix([s1], [s2], array_type="sparse").dtype == np.float64
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("use_numba", [True, False])
+def test_dtype_parameter_applies_to_pair_and_matrix(dtype, use_numba):
+    builder = SpectrumBuilder()
+    refs = [
+        _build(builder, [100, 200, 300], [0.1, 0.2, 1.0]),
+        _build(builder, [110, 190, 290], [0.5, 0.2, 1.0]),
+    ]
+    qrys = [
+        _build(builder, [100, 205, 305], [0.2, 0.3, 1.0]),
+        _build(builder, [50, 60, 70], [0.2, 0.2, 0.2]),
+    ]
+    # intensity_power != 1 also exercises the weighting path
+    sim = BlinkCosine(tolerance=5.0, bin_width=1.0, prefilter=False, intensity_power=0.5,
+                      use_numba=use_numba, dtype=dtype)
+
+    out = sim.pair(refs[0], qrys[0])
+    assert out["score"].dtype == dtype
+    assert sim.matrix(refs, qrys, array_type="numpy").dtype == dtype
+    assert sim.matrix(refs, qrys, array_type="sparse").dtype == dtype
+
+
+def test_float32_and_float64_scores_agree():
+    builder = SpectrumBuilder()
+    s1 = _build(builder, [100, 200, 300], [0.1, 0.2, 1.0])
+    s2 = _build(builder, [100, 205, 305], [0.2, 0.3, 1.0])
+
+    f32 = BlinkCosine(tolerance=5.0, bin_width=1.0, prefilter=False, dtype=np.float32)
+    f64 = BlinkCosine(tolerance=5.0, bin_width=1.0, prefilter=False, dtype=np.float64)
+
+    assert float(f32.pair(s1, s2)["score"]) == pytest.approx(float(f64.pair(s1, s2)["score"]), 1e-6)
+    assert np.allclose(f32.matrix([s1, s2], [s1, s2]), f64.matrix([s1, s2], [s1, s2]), atol=1e-6)
